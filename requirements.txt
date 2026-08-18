@@ -6,12 +6,12 @@ pydantic>=2.0
 pydantic-settings>=2.13
 python-dotenv>=1.0
 loguru>=0.7.0
-Pillow>=10.0
+Pillow==12.2.0
 python-multipart>=0.0.9
 # 钉钉 SDK
 alibabacloud-dingtalk>=2.0.0
-# AI 生图 SDK
-google-genai>=0.8.0
+# AI 生图：google 模型走直连 httpx（请求格式见 docs/api-references/nanobanana-req.json）
+google-genai==1.69.0
 openai>=1.0.0
 # 重试
 tenacity>=8.2.0

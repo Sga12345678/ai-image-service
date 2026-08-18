@@ -1,12 +1,16 @@
 """AI 生图引擎。
 
-统一入口，按 model 分派到对应 SDK（Google / OpenAI）。
+统一入口，按 model 分派：google 走 httpx 直连中转站 Gemini 兼容接口，
+openai 走 OpenAI SDK。
 """
 
 import asyncio
 import base64
+import hashlib
 import io
-import random
+
+import logging
+logging.getLogger("httpx").setLevel(logging.DEBUG)
 
 import httpx
 
@@ -22,8 +26,6 @@ _NETWORK_RETRY_ERRORS = (
     httpx.NetworkError,
     httpx.RemoteProtocolError,
 ) + _AIOHTTP_NETWORK_ERRORS
-from google import genai
-from google.genai import types
 from loguru import logger
 from openai import AsyncOpenAI
 from PIL import Image
@@ -39,6 +41,15 @@ def _to_png_bytes(image_bytes: bytes) -> bytes:
     return buf.getvalue()
 
 
+def _as_image_list(images: bytes | list[bytes] | None) -> list[bytes]:
+    """把单图/多图/None 统一归一为 list[bytes]，过滤掉空值。"""
+    if images is None:
+        return []
+    if isinstance(images, (bytes, bytearray)):
+        return [bytes(images)]
+    return [bytes(b) for b in images if b]
+
+
 def _map_gpt_size(resolution: str | None) -> str | None:
     """把 NanoBanana 风格 resolution 映射到 GPT 5 档 size。
 
@@ -50,10 +61,10 @@ def _map_gpt_size(resolution: str | None) -> str | None:
 
 
 class AIGenerator:
-    """AI 生图引擎，统一调度 Google / OpenAI SDK。
+    """AI 生图引擎，按 provider 分派：google 走 httpx 直连，openai 走 OpenAI SDK。
 
     根据 config.toml 中 model 配置的 provider 字段（"google" / "openai"）
-    分派到对应 SDK。新增模型只需在 config.toml 中添加配置，无需改代码。
+    分派到对应实现。新增模型只需在 config.toml 中添加配置，无需改代码。
     """
 
     # 批量生图内部并发上限，避免 count 较大时打爆上游 API rate limit
@@ -61,7 +72,6 @@ class AIGenerator:
 
     def __init__(self, settings: Settings):
         self.settings = settings
-        self._genai_clients: dict[str, genai.Client] = {}
 
     async def _retry_on_network_error(self, func, *args, **kwargs):
         """网络异常重试装饰器逻辑。"""
@@ -81,17 +91,17 @@ class AIGenerator:
         self,
         model: str,
         prompt: str,
-        reference_image: bytes | None = None,
+        reference_image: bytes | list[bytes] | None = None,
         table_config: TableConfig | None = None,
         aspect_ratio: str | None = None,
         resolution: str | None = None,
     ) -> bytes:
-        """根据 model 参数分派到对应 SDK，返回统一 PNG 格式字节流。
+        """根据 model 参数分派到对应实现，返回统一 PNG 格式字节流。
 
         Args:
             model: 模型名称（如 "Nano Banana 2"）
             prompt: 生图提示词
-            reference_image: 素材图字节（可选）
+            reference_image: 素材图字节，单张 bytes 或多张 list[bytes]（可选）
             table_config: 表格配置，通过 image_api_key_env 字段获取 AI 图片 API Key 环境变量名。必填。
             aspect_ratio: 生成比例（如 "16:9"）。仅 NanoBanana 生效，GPT 忽略。
             resolution: 分辨率档位（"1K"/"2K"/"4K"）。仅 NanoBanana 完整生效，
@@ -132,7 +142,7 @@ class AIGenerator:
         self,
         model: str,
         prompts: list[str],
-        reference_image: bytes | None = None,
+        reference_image: bytes | list[bytes] | None = None,
         table_config: TableConfig | None = None,
         aspect_ratio: str | None = None,
         resolution: str | None = None,
@@ -190,37 +200,72 @@ class AIGenerator:
         base_url: str,
         model_name: str,
         prompt: str,
-        image_bytes: bytes | None,
+        image_bytes: bytes | list[bytes] | None,
         api_key: str,
         aspect_ratio: str | None = None,
         resolution: str | None = None,
     ) -> bytes:
-        """调用 Google genai SDK 图生图。
+        """通过 httpx 直连中转站 Gemini 兼容接口生图（请求体格式见
+        docs/api-references/nanobanana-req.json）。
 
-        aspect_ratio / resolution 任一非空时构造 image_config，否则 config=None 走 SDK 默认。
+        请求体 schema 关键约束：
+        - parts 中 inline 用 snake_case 字段 ``inline_data`` / ``mime_type``
+        - generationConfig 顶层与 imageConfig / thinkingConfig 均为 camelCase
+          （responseModalities / aspectRatio / imageSize / thinkingLevel）
+        - 鉴权使用 ``Authorization: Bearer <api_key>``
         """
-        client = self._get_genai_client(api_key, base_url).aio
-        pil_image = Image.open(io.BytesIO(image_bytes))
+        image_bytes_list = _as_image_list(image_bytes)
 
-        # 仅在用户提供比例/分辨率时才加 image_config，避免空 ImageConfig() 触发 SDK 校验
-        config = None
-        if aspect_ratio or resolution:
-            config = types.GenerateContentConfig(
-                response_modalities=["IMAGE"],
-                image_config=types.ImageConfig(
-                    aspect_ratio=aspect_ratio or None,
-                    image_size=resolution or None,
-                ),
-            )
+        parts: list[dict] = [{"text": prompt}]
+        img_md5: list[str] = []
+        for raw_bytes in image_bytes_list:
+            img_md5.append(hashlib.md5(raw_bytes).hexdigest()[:8])
+            parts.append({
+                "inline_data": {
+                    "mime_type": "image/png",
+                    "data": base64.b64encode(raw_bytes).decode("ascii"),
+                },
+            })
 
-        response = await client.models.generate_content(
+        body = {
+            "contents": [{"role": "user", "parts": parts}],
+            "generationConfig": {
+                "responseModalities": ["TEXT", "IMAGE"],
+                "imageConfig": {
+                    "aspectRatio": aspect_ratio or "3:4",
+                    "imageSize": resolution or "2K",
+                },
+                "thinkingConfig": {"thinkingLevel": "Minimal"},
+            },
+        }
+        logger.info(
+            "Gemini 生图请求体",
             model=model_name,
-            contents=[prompt, pil_image],
-            config=config,
+            prompt_len=len(prompt),
+            image_count=len(image_bytes_list),
+            image_md5_prefix=img_md5,
         )
-        for part in response.parts:
-            if part.inline_data is not None:
-                return _to_png_bytes(part.inline_data.data)
+
+        url = f"{base_url.rstrip('/')}/v1beta/models/{model_name}:generateContent"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(300.0, connect=30.0),
+        ) as client:
+            response = await client.post(url, json=body, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+
+        candidates = data.get("candidates") or []
+        if not candidates:
+            raise ValueError("No image generated in response: empty candidates")
+        for part in (candidates[0].get("content") or {}).get("parts") or []:
+            inline = part.get("inlineData") or part.get("inline_data")
+            if inline and inline.get("data"):
+                return _to_png_bytes(base64.b64decode(inline["data"]))
         raise ValueError("No image generated in response")
 
     async def _generate_gpt(
@@ -228,14 +273,15 @@ class AIGenerator:
         base_url: str,
         model_name: str,
         prompt: str,
-        image: bytes | None,
+        image: bytes | list[bytes] | None,
         api_key: str,
         resolution: str | None = None,
     ) -> bytes:
-        """调用 OpenAI SDK 图生图。
+        """调用 OpenAI SDK 图生图（支持多张参考图）。
 
         resolution 走 _map_gpt_size 映射到 5 档 size，映射不上为 None（走 SDK 默认 auto）。
         aspect_ratio 对 GPT 无效，忽略。
+        image 单张时传 bytes、多张时传 list[bytes]（gpt-image 的 image 参数接受数组）。
         """
         client = AsyncOpenAI(
             api_key=api_key,
@@ -244,9 +290,10 @@ class AIGenerator:
             max_retries=0,
         )
         size = _map_gpt_size(resolution)
+        imgs = _as_image_list(image)
         response = await client.images.edit(
             model=model_name,
-            image=image,
+            image=imgs[0] if len(imgs) == 1 else imgs,
             prompt=prompt,
             n=1,
             response_format="b64_json",
@@ -254,18 +301,6 @@ class AIGenerator:
         )
         return base64.b64decode(response.data[0].b64_json)
 
-    def _get_genai_client(self, api_key: str, base_url: str) -> genai.Client:
-        """按 base_url + api_key 前缀缓存 Client，复用连接池。"""
-        cache_key = f"{base_url}:{api_key[:8]}"
-        if cache_key not in self._genai_clients:
-            self._genai_clients[cache_key] = genai.Client(
-                api_key=api_key,
-                http_options={"base_url": base_url},
-            )
-        return self._genai_clients[cache_key]
-
     async def close(self) -> None:
-        """关闭所有缓存的 genai Client，释放底层连接池。"""
-        for client in self._genai_clients.values():
-            await client.aio.close()
-        self._genai_clients.clear()
+        """释放 AIGenerator 持有的资源（当前实现为无操作）。"""
+        return None

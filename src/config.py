@@ -165,6 +165,12 @@ class DingtalkConfig(BaseModel):
     video_tables: list[VideoTableConfig] = []
 
 
+
+class DebugConfig(BaseModel):
+    """调试配置，对应 [debug]。"""
+
+    image_dump_enabled: bool = False
+
 class _EnvSettings(BaseSettings):
     """敏感配置，仅从 .env 加载。"""
 
@@ -199,6 +205,7 @@ class Settings(BaseSettings):
     server: ServerConfig = ServerConfig()
     ai: AiConfig = AiConfig()
     dingtalk: DingtalkConfig = DingtalkConfig()
+    debug: DebugConfig = DebugConfig()
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -247,6 +254,10 @@ class Settings(BaseSettings):
                 ai_data["video_poll"] = VideoPollConfig(**ai_data["video"].pop("poll"))
             merged = self.ai.model_dump() | ai_data
             self.ai = AiConfig(**merged)
+
+        if "debug" in data and "debug" not in explicit:
+            merged = self.debug.model_dump() | data["debug"]
+            self.debug = DebugConfig(**merged)
 
         self._apply_env_overrides()
 
