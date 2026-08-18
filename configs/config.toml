@@ -486,3 +486,64 @@ count_field = "生成数量"
 aspect_ratio_field = "生成比例"
 resolution_field = "分辨率"
 perturbations_field = "扰动列表"
+
+# ===== 添加提示词动作图生图配置 =====
+# 单表多图：按「提示词」字段行数生成 N 张图；aspect_ratio=3:4 硬编码；
+# 分辨率（1K/2K/4K）从「分辨率」字段读取；无 task_name / 无提示词表。
+[[dingtalk.tables]]
+key = "zhuozhi-promptAD"
+base_id = "ZgpG2NdyVX6bMqMaTGgr2nLG8MwvDqPk"
+sheet_id = "RitChsQ"
+image_api_key_env = "ZHUOZHI_IMAGE_API_KEY"
+
+batch_mode = true
+prompt_ad_mode = true                                # ← 新模式开关
+
+# 字段映射（按钉钉表实际列名配置）
+model_field = "生图模型"
+prompt_field = "提示词"                              # 单表内自带多行编号提示词
+reference_image_field = "素材图"
+result_image_field = "生成图片"
+result_status_field = "生成结果"
+result_time_field = "生成时间"
+
+# 提示词动作图特有字段
+resolution_field = "分辨率"                           # 可选值 1K / 2K / 4K，缺失/空 → None
+
+# ===== AHMI 添加提示词动作图生图配置 =====
+[[dingtalk.tables]]
+key = "ahmi-promptAD"
+base_id = "YMyQA2dXW7lPDdDrT5M7MOORVzlwrZgb"
+sheet_id = "5Vkk0h4"
+image_api_key_env = "AHMI_IMAGE_API_KEY"
+
+batch_mode = true
+prompt_ad_mode = true
+
+model_field = "生图模型"
+prompt_field = "提示词"
+reference_image_field = "素材图"
+result_image_field = "生成图片"
+result_status_field = "生成结果"
+result_time_field = "生成时间"
+
+resolution_field = "分辨率"
+
+# ===== 画朴添加提示词动作图生图配置 =====
+[[dingtalk.tables]]
+key = "huapu-promptAD"
+base_id = "qnYMoO1rWxnLBYBbSzQ1KEQBJ47Z3je9"
+sheet_id = "n6ixbQW"
+image_api_key_env = "HUAPU_IMAGE_API_KEY"
+
+batch_mode = true
+prompt_ad_mode = true
+
+model_field = "生图模型"
+prompt_field = "提示词"
+reference_image_field = "素材图"
+result_image_field = "生成图片"
+result_status_field = "生成结果"
+result_time_field = "生成时间"
+
+resolution_field = "分辨率"

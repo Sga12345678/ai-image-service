@@ -17,6 +17,8 @@ from generator import AIGenerator
 from models.prompt_config import (
     _FALLBACK_SUFFIX_START,
     _extract_pert_number,
+    _split_perturbations,
+    _strip_pert_number,
     _to_text,
     PromptConfig,
     assign_sousuo_index,
@@ -262,6 +264,11 @@ class GenerationService:
         # 0a. 分流：基础素材模块（仅 zhuozhi-baseMaterial 启用）
         if table_config.base_material_mode:
             await self._process_batch_base_material(record_id, table_config)
+            return
+
+        # 0b. 分流：提示词动作图（仅 zhuozhi-promptAD 启用；单表多图，无 prompt table）
+        if table_config.prompt_ad_mode:
+            await self._process_promptAD(record_id, table_config)
             return
 
         step_start = time.monotonic()
@@ -916,6 +923,148 @@ class GenerationService:
         )
         logger.info(
             "搜推素材批量生图耗时",
+            record_id=record_id,
+            elapsed_sec=round(time.monotonic() - step_start, 2),
+        )
+
+    async def _process_promptAD(
+        self, record_id: str, table_config: TableConfig
+    ) -> None:
+        """提示词动作图：单表多图，每行提示词生成一张，aspect_ratio=3:4 硬编码。
+
+        前置条件：table_config.prompt_ad_mode=true 且启动时校验通过。
+
+        流程：
+        1. 取记录
+        2. 解析「提示词」字段为行列表（按 \\n 拆分，过滤空白行）
+        3. 下载首张素材图（仅 1 张）
+        4. 读「分辨率」字段（缺省/空 → 透传 None）
+        5. 调用 generate_batch（aspect_ratio="3:4"，resolution=res_value）
+        6. 串行上传，文件名 generated_<record_id>_<idx>.png；
+           idx 取行首编号（_extract_pert_number）；无编号则 _FALLBACK_SUFFIX_START 递增
+        7. 回写：状态 成功N/M（或失败: ...）；附件直接覆盖「生成图片」字段
+
+        与 _process_batch 的差异：
+        - 无 task_name / prompt_table
+        - 提示词源是生图表的「提示词」字段本身，不是提示词表的「扰动列表」
+        - 文件名只含 record_id + 编号（不带 goodsId / shopCode）
+        - 失败时若所有生成/上传失败 → 走 _update_failure 写"失败: ..."
+        """
+        step_start = time.monotonic()
+
+        # 1. 取记录
+        step = "获取记录数据"
+        record = await self.dingtalk.get_record(table_config, record_id)
+        fields = record.get("fields", {})
+
+        # 2. 解析多行提示词（每行一个）
+        prompt_lines = _split_perturbations(fields.get(table_config.prompt_field))
+        if not prompt_lines:
+            logger.warning("提示词字段为空", record_id=record_id)
+            await self._update_failure(table_config, record_id, "提示词字段为空")
+            return
+        logger.info(
+            "本次提示词动作图配置",
+            record_id=record_id,
+            prompt_count=len(prompt_lines),
+            aspect_ratio="3:4",
+        )
+
+        # 3. 下载首张素材图（仅 1 张）
+        step = "下载素材图"
+        ref_image_data = fields.get(table_config.reference_image_field)
+        if not isinstance(ref_image_data, list) or not ref_image_data:
+            await self._update_failure(table_config, record_id, "素材图不能为空")
+            return
+        ref_image_url = ref_image_data[0].get("url")
+        if not ref_image_url:
+            await self._update_failure(table_config, record_id, "素材图 url 为空")
+            return
+        ref_image_bytes = await self.dingtalk.download_file(ref_image_url)
+
+        # 4. 解析模型 + 读取分辨率
+        step = "解析模型与分辨率"
+        model = self._resolve_model(fields, table_config, self.settings.ai.default_model)
+        resolution_value: str | None = (
+            _to_text(fields.get(table_config.resolution_field)) or None
+        )
+
+        # 5. 批量生图（aspect_ratio 硬编码 3:4）
+        step = "批量生图"
+        # 传给 AI 的 prompt：去掉行首编号
+        ai_prompts = [_strip_pert_number(p) for p in prompt_lines]
+        results = await self.generator.generate_batch(
+            model=model,
+            prompts=ai_prompts,
+            reference_image=ref_image_bytes,
+            table_config=table_config,
+            aspect_ratio="3:4",
+            resolution=resolution_value,
+        )
+        success_count = sum(1 for r in results if r is not None)
+        if success_count == 0:
+            await self._update_failure(
+                table_config, record_id,
+                f"全部 {len(prompt_lines)} 张生图失败",
+            )
+            return
+
+        # 6. 串行上传 + 编号文件名
+        step = "上传结果"
+        attachments: list[dict] = []
+        upload_errors: list[str] = []
+        fallback_counter = _FALLBACK_SUFFIX_START
+        for i, img_bytes in enumerate(results):
+            if img_bytes is None:
+                continue
+            # 文件名后缀：取该行 prompt 的编号；无编号从 101 递增
+            pert_num = _extract_pert_number(prompt_lines[i])
+            if pert_num is not None:
+                suffix = pert_num
+            else:
+                suffix = fallback_counter
+                fallback_counter += 1
+            try:
+                att = await self.dingtalk.upload_attachment(
+                    table_config,
+                    img_bytes,
+                    f"generated_{record_id}_{suffix}.png",
+                )
+                attachments.append(att)
+            except Exception as e:
+                upload_errors.append(f"第{i+1}张上传失败: {e}")
+                logger.error(
+                    "单图上传失败", record_id=record_id, index=i+1, error=str(e),
+                )
+
+        # 7. 回写（与 _process_batch step 8 完全一致的契约）
+        step = "回写"
+        status_text = f"成功{len(attachments)}/{len(results)}"
+        if upload_errors:
+            status_text += f"; {'; '.join(upload_errors)}"
+        if attachments:
+            await self.dingtalk.update_record(
+                table_config,
+                record_id,
+                {
+                    table_config.result_image_field: attachments,
+                    table_config.result_status_field: status_text,
+                    table_config.result_time_field: datetime.now().strftime("%Y-%m-%d %H:%M"),
+                },
+            )
+        else:
+            # 全部生成成功但所有上传失败 → 走 _update_failure
+            await self._update_failure(
+                table_config, record_id,
+                f"全部 {len(results)} 张上传失败: {'; '.join(upload_errors)}",
+            )
+            return
+        logger.info(
+            "提示词动作图完成", record_id=record_id,
+            success=len(attachments), total=len(results),
+        )
+        logger.info(
+            "提示词动作图耗时",
             record_id=record_id,
             elapsed_sec=round(time.monotonic() - step_start, 2),
         )

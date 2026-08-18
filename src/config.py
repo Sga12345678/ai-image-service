@@ -52,6 +52,10 @@ class TableConfig(BaseModel):
     prompt_table_sheet_id: str | None = None   # 提示词表 sheet_id
     prompt_table: PromptTableConfig | None = None
 
+    # 提示词动作图模块（单表多图，无需 task_name / prompt_table）
+    prompt_ad_mode: bool = False
+    resolution_field: str | None = None  # "分辨率"
+
     # 单图模式字段（batch_mode=false 时使用）
     prompt_field: str = "提示词"
 
@@ -265,6 +269,13 @@ class Settings(BaseSettings):
         """
         for table in self.dingtalk.tables:
             if not table.batch_mode:
+                continue
+            # prompt_ad_mode 单表批量，无需 task_name / prompt_table，但需 resolution_field
+            if table.prompt_ad_mode:
+                if not table.resolution_field:
+                    raise ConfigError(
+                        f"Table '{table.key}' has prompt_ad_mode=true but missing resolution_field"
+                    )
                 continue
             missing = []
             if not table.task_name:
