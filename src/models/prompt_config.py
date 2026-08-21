@@ -14,6 +14,14 @@ _PERT_STRIP_RE = re.compile(r"^\s*\d+\s*[.,、]\s*")
 # 无编号扰动的文件名后缀起始值（与正常编号 1-99 区分）
 _FALLBACK_SUFFIX_START = 101
 
+# 生成图比例白名单（promptAD 模式专用）：覆盖常见 AI 生图档位
+# 包含正方形（1:1）、经典 4:3/3:4、移动端 9:16/16:9、Instagram 4:5/5:4、全景 21:9 等
+# 新增合法值时在此追加即可；运行时 _validate_aspect_ratio 校验。
+_VALID_ASPECT_RATIOS: frozenset[str] = frozenset({
+    "1:1", "3:4", "4:3", "9:16", "16:9",
+    "2:3", "3:2", "4:5", "5:4", "1:2", "2:1", "21:9",
+})
+
 
 def _extract_pert_number(pert: str) -> int | None:
     """从扰动文本开头提取编号。
@@ -74,6 +82,31 @@ def _to_text(value: Any) -> str:
 def _split_perturbations(value: Any) -> list[str]:
     text = _to_text(value)
     return [p.strip() for p in text.split("\n") if p.strip()]
+
+
+class AspectRatioError(ValueError):
+    """比例字段值不合法（为空 / 不在白名单）时抛出。"""
+
+
+def _validate_aspect_ratio(value: Any) -> str:
+    """校验并归一化比例字段值。
+
+    Args:
+        value: 钉钉单元格原始值（str / None / dict / list 等）。
+
+    Returns:
+        归一化后的比例字符串（trim 后原样返回，已确认在白名单中）。
+
+    Raises:
+        AspectRatioError: 值为空 / 非字符串 / 不在 _VALID_ASPECT_RATIOS 中。
+    """
+    text = _to_text(value).strip()
+    if not text:
+        raise AspectRatioError("比例字段不能为空")
+    if text not in _VALID_ASPECT_RATIOS:
+        valid = ", ".join(sorted(_VALID_ASPECT_RATIOS))
+        raise AspectRatioError(f"比例 {text} 非法，合法值: {valid}")
+    return text
 
 
 @dataclass

@@ -55,6 +55,7 @@ class TableConfig(BaseModel):
     # 提示词动作图模块（单表多图，无需 task_name / prompt_table）
     prompt_ad_mode: bool = False
     resolution_field: str | None = None  # "分辨率"
+    aspect_ratio_field: str | None = None  # "比例" — promptAD 必填，空值/非法值都报错
 
     # 单图模式字段（batch_mode=false 时使用）
     prompt_field: str = "提示词"
@@ -270,11 +271,19 @@ class Settings(BaseSettings):
         for table in self.dingtalk.tables:
             if not table.batch_mode:
                 continue
-            # prompt_ad_mode 单表批量，无需 task_name / prompt_table，但需 resolution_field
+            # prompt_ad_mode 单表批量，无需 task_name / prompt_table
+            # 但需 resolution_field（分辨率，可空走 None）
+            # 且需 aspect_ratio_field（比例，运行时按字段值+白名校验）
             if table.prompt_ad_mode:
+                missing = []
                 if not table.resolution_field:
+                    missing.append("resolution_field")
+                if not table.aspect_ratio_field:
+                    missing.append("aspect_ratio_field")
+                if missing:
                     raise ConfigError(
-                        f"Table '{table.key}' has prompt_ad_mode=true but missing resolution_field"
+                        f"Table '{table.key}' has prompt_ad_mode=true but missing: "
+                        f"{', '.join(missing)}"
                     )
                 continue
             missing = []

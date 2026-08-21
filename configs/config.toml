@@ -509,6 +509,7 @@ result_time_field = "生成时间"
 
 # 提示词动作图特有字段
 resolution_field = "分辨率"                           # 可选值 1K / 2K / 4K，缺失/空 → None
+aspect_ratio_field = "比例"                          # 必填，空值/非法值都报错退出；运行时按白名单校验
 
 # ===== AHMI 添加提示词动作图生图配置 =====
 [[dingtalk.tables]]
@@ -528,6 +529,7 @@ result_status_field = "生成结果"
 result_time_field = "生成时间"
 
 resolution_field = "分辨率"
+aspect_ratio_field = "比例"
 
 # ===== 画朴添加提示词动作图生图配置 =====
 [[dingtalk.tables]]
@@ -547,3 +549,4 @@ result_status_field = "生成结果"
 result_time_field = "生成时间"
 
 resolution_field = "分辨率"
+aspect_ratio_field = "比例"

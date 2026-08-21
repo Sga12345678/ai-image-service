@@ -20,6 +20,8 @@ from models.prompt_config import (
     _split_perturbations,
     _strip_pert_number,
     _to_text,
+    _validate_aspect_ratio,
+    AspectRatioError,
     PromptConfig,
     assign_sousuo_index,
     build_prompts,
@@ -930,23 +932,26 @@ class GenerationService:
     async def _process_promptAD(
         self, record_id: str, table_config: TableConfig
     ) -> None:
-        """提示词动作图：单表多图，每行提示词生成一张，aspect_ratio=3:4 硬编码。
+        """提示词动作图：单表多图，每行提示词生成一张。
 
-        前置条件：table_config.prompt_ad_mode=true 且启动时校验通过。
+        前置条件：table_config.prompt_ad_mode=true 且启动时校验通过
+        （resolution_field / aspect_ratio_field 均已配置）。
 
         流程：
         1. 取记录
         2. 解析「提示词」字段为行列表（按 \\n 拆分，过滤空白行）
         3. 下载首张素材图（仅 1 张）
-        4. 读「分辨率」字段（缺省/空 → 透传 None）
-        5. 调用 generate_batch（aspect_ratio="3:4"，resolution=res_value）
-        6. 串行上传，文件名 generated_<record_id>_<idx>.png；
+        4. 读「比例」字段并按白名单校验（空值/非法 → 写失败退出）
+        5. 读「分辨率」字段（缺省/空 → 透传 None）
+        6. 调用 generate_batch（aspect_ratio=字段值，resolution=res_value）
+        7. 串行上传，文件名 generated_<record_id>_<idx>.png；
            idx 取行首编号（_extract_pert_number）；无编号则 _FALLBACK_SUFFIX_START 递增
-        7. 回写：状态 成功N/M（或失败: ...）；附件直接覆盖「生成图片」字段
+        8. 回写：状态 成功N/M（或失败: ...）；附件直接覆盖「生成图片」字段
 
         与 _process_batch 的差异：
         - 无 task_name / prompt_table
         - 提示词源是生图表的「提示词」字段本身，不是提示词表的「扰动列表」
+        - 比例由记录字段驱动（已校验），非硬编码
         - 文件名只含 record_id + 编号（不带 goodsId / shopCode）
         - 失败时若所有生成/上传失败 → 走 _update_failure 写"失败: ..."
         """
@@ -963,14 +968,27 @@ class GenerationService:
             logger.warning("提示词字段为空", record_id=record_id)
             await self._update_failure(table_config, record_id, "提示词字段为空")
             return
+
+        # 3. 校验「比例」字段（空值/非法都立即失败退出，不进 AI 调用）
+        try:
+            aspect_ratio_value = _validate_aspect_ratio(
+                fields.get(table_config.aspect_ratio_field)
+            )
+        except AspectRatioError as e:
+            logger.warning(
+                "比例字段校验失败", record_id=record_id, error=str(e),
+            )
+            await self._update_failure(table_config, record_id, str(e))
+            return
+
         logger.info(
             "本次提示词动作图配置",
             record_id=record_id,
             prompt_count=len(prompt_lines),
-            aspect_ratio="3:4",
+            aspect_ratio=aspect_ratio_value,
         )
 
-        # 3. 下载首张素材图（仅 1 张）
+        # 4. 下载首张素材图（仅 1 张）
         step = "下载素材图"
         ref_image_data = fields.get(table_config.reference_image_field)
         if not isinstance(ref_image_data, list) or not ref_image_data:
@@ -982,14 +1000,14 @@ class GenerationService:
             return
         ref_image_bytes = await self.dingtalk.download_file(ref_image_url)
 
-        # 4. 解析模型 + 读取分辨率
+        # 5. 解析模型 + 读取分辨率
         step = "解析模型与分辨率"
         model = self._resolve_model(fields, table_config, self.settings.ai.default_model)
         resolution_value: str | None = (
             _to_text(fields.get(table_config.resolution_field)) or None
         )
 
-        # 5. 批量生图（aspect_ratio 硬编码 3:4）
+        # 6. 批量生图（aspect_ratio 由记录字段驱动）
         step = "批量生图"
         # 传给 AI 的 prompt：去掉行首编号
         ai_prompts = [_strip_pert_number(p) for p in prompt_lines]
@@ -998,7 +1016,7 @@ class GenerationService:
             prompts=ai_prompts,
             reference_image=ref_image_bytes,
             table_config=table_config,
-            aspect_ratio="3:4",
+            aspect_ratio=aspect_ratio_value,
             resolution=resolution_value,
         )
         success_count = sum(1 for r in results if r is not None)
