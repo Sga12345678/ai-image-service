@@ -60,6 +60,14 @@ def _map_gpt_size(resolution: str | None) -> str | None:
     return "1024x1024" if resolution == "1K" else None
 
 
+# 临时灰度：仅卓芝表（table key 前缀 zhuozhi）已迁移到新中转站 relayrouter，
+# 其他品牌回落 [ai.model] 配置的老站 base_url。画朴/AHMI 全部迁移后删除本映射及判断。
+_ZHUOZHI_RELAY_BASE_URLS = {
+    "google": "https://api.relayrouter.ai",
+    "openai": "https://api.relayrouter.ai/v1",
+}
+
+
 class AIGenerator:
     """AI 生图引擎，按 provider 分派：google 走 httpx 直连，openai 走 OpenAI SDK。
 
@@ -113,23 +121,28 @@ class AIGenerator:
         async def _do_generate():
             model_cfg = self.settings.get_model(model)
             api_key = self.settings.get_api_key(table_config.image_api_key_env)
+            # 卓芝表走新站 relayrouter，其他品牌走 [ai.model] 配置的默认 base_url
+            base_url = model_cfg.base_url
+            if table_config.key.startswith("zhuozhi"):
+                base_url = _ZHUOZHI_RELAY_BASE_URLS[model_cfg.provider]
             logger.info(
                 "AI 生图路由",
                 model=model,
                 provider=model_cfg.provider,
                 model_name=model_cfg.model_name,
+                base_url=base_url,
                 aspect_ratio=aspect_ratio or "",
                 resolution=resolution or "",
             )
             if model_cfg.provider == "google":
                 raw = await self._generate_nano(
-                    model_cfg.base_url, model_cfg.model_name,
+                    base_url, model_cfg.model_name,
                     prompt, reference_image, api_key,
                     aspect_ratio=aspect_ratio, resolution=resolution,
                 )
             elif model_cfg.provider == "openai":
                 raw = await self._generate_gpt(
-                    model_cfg.base_url, model_cfg.model_name,
+                    base_url, model_cfg.model_name,
                     prompt, reference_image, api_key,
                     resolution=resolution,
                 )
