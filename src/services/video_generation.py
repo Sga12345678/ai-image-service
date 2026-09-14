@@ -216,4 +216,6 @@ class VideoGenerationService:
                     f"step={step}\n{tb}"
                 )
                 if table_config is not None:
-                    await self._update_failure(table_config, record_id, f"[{step}] {e}")
+                    await self._update_failure(
+                        table_config, record_id, f"[{step}] {e}"
+                    )

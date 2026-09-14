@@ -550,3 +550,67 @@ result_time_field = "生成时间"
 
 resolution_field = "分辨率"
 aspect_ratio_field = "比例"
+
+# ===== 卓芝搭配生图生图配置 =====
+# 多参考图输入（1 模特图 + N 素材图，按顺序作为图1/图2/...），
+# 单图输出。prompt 文本里通过"图1""图2"引用对应图片。
+[[dingtalk.tables]]
+key = "zhuozhi-genMatch"
+base_id = "ZgpG2NdyVX6bMqMaTGgr2nLG8MwvDqPk"
+sheet_id = "w4Xyem2"
+image_api_key_env = "ZHUOZHI_IMAGE_API_KEY"
+
+batch_mode = false                                # 单图输出
+gen_match_mode = true                              # ← 搭配生图模块开关
+
+# 字段映射（按钉钉表实际列名配置）
+model_field = "生图模型"
+prompt_field = "提示词"
+model_image_field = "模特图"                       # 单张参考图 → 图1
+reference_image_field = "素材图"                   # 1+ 张参考图 → 图2/图3/...
+result_image_field = "生成图片"
+result_status_field = "生成结果"
+result_time_field = "生成时间"
+
+# 分辨率（可选值 1K / 2K / 4K，缺失/空 → None）
+resolution_field = "分辨率"
+
+[[dingtalk.tables]]
+key = "ahmi-genMatch"
+base_id = "P7QG4Yx2JprmqZq3SqP3px9zW9dEq3XD"
+sheet_id = "7NqViHd"
+image_api_key_env = "AHMI_IMAGE_API_KEY"
+
+batch_mode = false
+gen_match_mode = true
+
+# 字段映射（与 zhuozhi-genMatch 完全一致：AHMI/卓芝字段名相同）
+model_field = "生图模型"
+prompt_field = "提示词"
+model_image_field = "模特图"
+reference_image_field = "素材图"
+result_image_field = "生成图片"
+result_status_field = "生成结果"
+result_time_field = "生成时间"
+
+resolution_field = "分辨率"
+
+[[dingtalk.tables]]
+key = "huapu-genMatch"
+base_id = "qnYMoO1rWxnLBYBbSzQ1KEQBJ47Z3je9"
+sheet_id = "aZUwoct"
+image_api_key_env = "HUAPU_IMAGE_API_KEY"
+
+batch_mode = false
+gen_match_mode = true
+
+# 字段映射（与 zhuozhi-genMatch 完全一致）
+model_field = "生图模型"
+prompt_field = "提示词"
+model_image_field = "模特图"
+reference_image_field = "素材图"
+result_image_field = "生成图片"
+result_status_field = "生成结果"
+result_time_field = "生成时间"
+
+resolution_field = "分辨率"
