@@ -14,7 +14,6 @@ from loguru import logger
 from config import Settings, VideoTableConfig
 from dingtalk.client import DingTalkClient
 from generator.video_engine import VideoGenerator
-from utils.exceptions import describe_exc
 
 
 class VideoGenerationService:
@@ -218,5 +217,5 @@ class VideoGenerationService:
                 )
                 if table_config is not None:
                     await self._update_failure(
-                        table_config, record_id, f"[{step}] {describe_exc(e)}"
+                        table_config, record_id, f"[{step}] {e}"
                     )

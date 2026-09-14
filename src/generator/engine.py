@@ -17,7 +17,6 @@ from openai import AsyncOpenAI
 from PIL import Image
 
 from config import Settings, TableConfig
-from utils.exceptions import describe_exc
 
 try:
     import aiohttp
@@ -99,14 +98,14 @@ class AIGenerator:
                         "网络异常，退避后重试",
                         attempt=f"{attempt + 1}/{max_retries + 1}",
                         delay=f"{delay:.1f}s",
-                        error=describe_exc(e),
+                        error=str(e),
                     )
                     await asyncio.sleep(delay)
                 else:
                     logger.opt(exception=True).error(
                         "网络异常重试耗尽",
                         attempts=max_retries + 1,
-                        error=describe_exc(e),
+                        error=str(e),
                     )
         raise last_error
 

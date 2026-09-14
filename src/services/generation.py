@@ -14,7 +14,6 @@ from loguru import logger
 from config import Settings, TableConfig
 from dingtalk.client import DingTalkClient
 from generator import AIGenerator
-from utils.exceptions import describe_exc
 from models.prompt_config import (
     _FALLBACK_SUFFIX_START,
     _extract_pert_number,
@@ -156,7 +155,7 @@ class GenerationService:
                 logger.error(f"生图流程异常 record_id={record_id} step={step}\n{tb}")
                 if table_config is not None:
                     await self._update_failure(
-                        table_config, record_id, f"[{step}] {describe_exc(e)}"
+                        table_config, record_id, f"[{step}] {e}"
                     )
 
     async def _process_single(
@@ -377,33 +376,11 @@ class GenerationService:
 
         # 9. 上传 1 张结果图
         step = "上传结果"
-        try:
-            attachment_info = await self.dingtalk.upload_attachment(
-                table_config,
-                result_bytes,
-                f"generated_{record_id}.png",
-            )
-        except Exception as upload_err:
-            # AI 生图已成功（result_bytes 有效），只是上传这一步挂了。
-            # 把图存盘留底，表里写"AI 成功/上传失败"，便于人工捞回，
-            # 避免和"AI 没跑成功"的状态混淆。
-            dump_path = self._dump_image(
-                "upload_failed", result_bytes, record_id, table_config.key
-            )
-            logger.error(
-                "AI 生图成功但上传失败",
-                record_id=record_id,
-                size=len(result_bytes),
-                dumped=str(dump_path),
-                error=describe_exc(upload_err),
-            )
-            await self._update_failure(
-                table_config,
-                record_id,
-                f"OSS 上传失败: {describe_exc(upload_err)}"
-                f"（AI 已生图 {len(result_bytes)} bytes，已留底到 {dump_path}）",
-            )
-            return
+        attachment_info = await self.dingtalk.upload_attachment(
+            table_config,
+            result_bytes,
+            f"generated_{record_id}.png",
+        )
         logger.info("上传成功", record_id=record_id, elapsed=self._elapsed(step_start))
         step_start = time.monotonic()
 
@@ -555,7 +532,7 @@ class GenerationService:
                 )
                 attachments.append(att)
             except Exception as e:
-                upload_errors.append(f"第{i+1}张上传失败: {describe_exc(e)}")
+                upload_errors.append(f"第{i+1}张上传失败: {e}")
                 logger.error(
                     "单图上传失败", record_id=record_id, index=i+1, error=str(e),
                 )
@@ -770,7 +747,7 @@ class GenerationService:
                         success_list.append("场景图")
                         logger.info("场景图生成上传成功", record_id=record_id, goods_id=goods_id)
                     except Exception as e:
-                        failure_list.append(f"场景图: {describe_exc(e)}")
+                        failure_list.append(f"场景图: {e}")
                         logger.error("场景图生成失败", record_id=record_id, error=str(e))
 
         # 8. 回写结果
@@ -874,7 +851,7 @@ class GenerationService:
                 record_id=record_id, goods_id=goods_id,
             )
         except Exception as e:
-            failure_list.append(f"{section_name}: {describe_exc(e)}")
+            failure_list.append(f"{section_name}: {e}")
             logger.error(
                 "{}生成失败", section_name,
                 record_id=record_id, error=str(e),
@@ -1050,7 +1027,7 @@ class GenerationService:
                 )
                 attachments.append(att)
             except Exception as e:
-                upload_errors.append(f"{tname}#{idx}上传失败: {describe_exc(e)}")
+                upload_errors.append(f"{tname}#{idx}上传失败: {e}")
                 logger.error(
                     "单图上传失败", record_id=record_id,
                     segment=tname, index=idx, filename=filename, error=str(e),
@@ -1225,7 +1202,7 @@ class GenerationService:
                 )
                 attachments.append(att)
             except Exception as e:
-                upload_errors.append(f"第{i+1}张上传失败: {describe_exc(e)}")
+                upload_errors.append(f"第{i+1}张上传失败: {e}")
                 logger.error(
                     "单图上传失败", record_id=record_id, index=i+1, error=str(e),
                 )
