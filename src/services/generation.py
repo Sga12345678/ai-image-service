@@ -267,20 +267,19 @@ class GenerationService:
         - 【素材图】(reference_image_field)：≥1 张参考图，作为"图2/图3/..."
           （第一张=图2，第二张=图3，依此类推）
         - 【提示词】：单段文本，prompt 内文通过"图1""图2"等表述引用对应图片
-        - 【比例】【分辨率】：与 promptAD 一致（白名单校验）
 
         前置条件：table_config.gen_match_mode=true 且启动时校验通过
-        （model_image_field / aspect_ratio_field 均已配置）。
+        （model_image_field 已配置）。
 
         流程：
         1. 取记录
-        2. 校验【比例】字段（空值/非法 → 写失败退出）
-        3. 下载【模特图】1 张（图1）
-        4. 下载【素材图】≥1 张（图2/图3/...）
-        5. 校验【提示词】非空
-        6. 调用 generator.generate()，reference_image 传有序 list[bytes]
-        7. 上传 1 张结果图，文件名 generated_<record_id>.png
-        8. 回写：状态=成功，附件=1 张，时间戳
+        2. 下载【模特图】1 张（图1）
+        3. 下载【素材图】≥1 张（图2/图3/...）
+        4. 校验【提示词】非空
+        5. 调用 generator.generate()，reference_image 传有序 list[bytes]
+           （aspect_ratio / resolution 不传，与生图模块共用默认）
+        6. 上传 1 张结果图，文件名 generated_<record_id>.png
+        7. 回写：状态=成功，附件=1 张，时间戳
         """
         step_start = time.monotonic()
 
@@ -289,17 +288,7 @@ class GenerationService:
         record = await self.dingtalk.get_record(table_config, record_id)
         fields = record.get("fields", {})
 
-        # 2. 校验【比例】字段（空值/非法都立即失败退出）
-        try:
-            aspect_ratio_value = _validate_aspect_ratio(
-                fields.get(table_config.aspect_ratio_field)
-            )
-        except AspectRatioError as e:
-            logger.warning("比例字段校验失败", record_id=record_id, error=str(e))
-            await self._update_failure(table_config, record_id, str(e))
-            return
-
-        # 3. 下载【模特图】(图1，必须有)
+        # 2. 下载【模特图】(图1，必须有)
         step = "下载模特图"
         model_image_data = fields.get(table_config.model_image_field)
         if not isinstance(model_image_data, list) or not model_image_data:
@@ -315,7 +304,7 @@ class GenerationService:
             self._dump_image("model_extra", b, record_id, table_config.key)
         self._dump_image("model", model_image_bytes, record_id, table_config.key)
 
-        # 4. 下载【素材图】(图2/图3/...，至少 1 张)
+        # 3. 下载【素材图】(图2/图3/...，至少 1 张)
         step = "下载素材图"
         ref_image_data = fields.get(table_config.reference_image_field)
         if not isinstance(ref_image_data, list) or not ref_image_data:
@@ -328,21 +317,18 @@ class GenerationService:
         for b in ref_image_bytes_list:
             self._dump_image("ref", b, record_id, table_config.key)
 
-        # 5. 校验【提示词】
+        # 4. 校验【提示词】
         step = "校验提示词"
         prompt = fields.get(table_config.prompt_field)
         if not prompt:
             await self._update_failure(table_config, record_id, "提示词不能为空")
             return
 
-        # 6. 解析模型 + 读取分辨率
-        step = "解析模型与分辨率"
+        # 5. 解析模型
+        step = "解析模型"
         model = self._resolve_model(fields, table_config, self.settings.ai.default_model)
-        resolution_value: str | None = (
-            _to_text(fields.get(table_config.resolution_field)) or None
-        )
 
-        # 7. 构造有序参考图列表：[模特图(图1), 素材图[0](图2), 素材图[1](图3), ...]
+        # 6. 构造有序参考图列表：[模特图(图1), 素材图[0](图2), 素材图[1](图3), ...]
         ordered_refs: list[bytes] = [model_image_bytes] + ref_image_bytes_list
 
         logger.info(
@@ -351,19 +337,15 @@ class GenerationService:
             model_image_count=1,
             ref_image_count=len(ref_image_bytes_list),
             total_refs=len(ordered_refs),
-            aspect_ratio=aspect_ratio_value,
-            resolution=resolution_value or "",
         )
 
-        # 8. 调用 AI 生图（多参考图输入，单图输出）
+        # 7. 调用 AI 生图（多参考图输入，单图输出）
         step = "AI 生图"
         result_bytes = await self.generator.generate(
             model=model,
             prompt=prompt,
             reference_image=ordered_refs,
             table_config=table_config,
-            aspect_ratio=aspect_ratio_value,
-            resolution=resolution_value,
         )
         logger.info(
             "AI 生图完成",
@@ -374,7 +356,7 @@ class GenerationService:
         self._dump_image("gen", result_bytes, record_id, table_config.key)
         step_start = time.monotonic()
 
-        # 9. 上传 1 张结果图
+        # 8. 上传 1 张结果图
         step = "上传结果"
         attachment_info = await self.dingtalk.upload_attachment(
             table_config,
@@ -384,7 +366,7 @@ class GenerationService:
         logger.info("上传成功", record_id=record_id, elapsed=self._elapsed(step_start))
         step_start = time.monotonic()
 
-        # 10. 回写
+        # 9. 回写
         step = "回写"
         await self.dingtalk.update_record(
             table_config,

@@ -275,17 +275,12 @@ class Settings(BaseSettings):
         """
         for table in self.dingtalk.tables:
             if not table.batch_mode:
-                # 非 batch 表但启用 gen_match_mode 时，校验模型图字段 + 比例字段
+                # 非 batch 表但启用 gen_match_mode 时，校验模型图字段必填
                 if table.gen_match_mode:
-                    missing = []
                     if not table.model_image_field:
-                        missing.append("model_image_field")
-                    if not table.aspect_ratio_field:
-                        missing.append("aspect_ratio_field")
-                    if missing:
                         raise ConfigError(
-                            f"Table '{table.key}' has gen_match_mode=true but missing: "
-                            f"{', '.join(missing)}"
+                            f"Table '{table.key}' has gen_match_mode=true "
+                            f"but missing: model_image_field"
                         )
                 continue
             # prompt_ad_mode 单表批量，无需 task_name / prompt_table
