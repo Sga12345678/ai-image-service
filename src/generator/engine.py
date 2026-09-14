@@ -8,15 +8,11 @@ import asyncio
 import base64
 import hashlib
 import io
+
 import logging
-import random
+logging.getLogger("httpx").setLevel(logging.DEBUG)
 
 import httpx
-from loguru import logger
-from openai import AsyncOpenAI
-from PIL import Image
-
-from config import Settings, TableConfig
 
 try:
     import aiohttp
@@ -24,16 +20,17 @@ try:
 except ImportError:
     _AIOHTTP_NETWORK_ERRORS = ()
 
-# TODO: 这行会把 httpx 日志强制拉到 DEBUG（每次请求都打一堆），
-# 看着像调试遗留。要跟随全局 LOG_LEVEL 的话把它删掉即可。
-logging.getLogger("httpx").setLevel(logging.DEBUG)
-
 _NETWORK_RETRY_ERRORS = (
     httpx.ConnectError,
     httpx.TimeoutException,
     httpx.NetworkError,
     httpx.RemoteProtocolError,
 ) + _AIOHTTP_NETWORK_ERRORS
+from loguru import logger
+from openai import AsyncOpenAI
+from PIL import Image
+
+from config import Settings, TableConfig
 
 
 def _to_png_bytes(image_bytes: bytes) -> bytes:
@@ -77,13 +74,7 @@ class AIGenerator:
         self.settings = settings
 
     async def _retry_on_network_error(self, func, *args, **kwargs):
-        """网络异常重试：指数退避 + 抖动。
-
-        中转站偶发 RemoteProtocolError（连接被无响应地断开）往往是**突发性**的：
-        故障窗口持续几秒到几十秒。固定间隔重试容易三次尝试全落在同一个窗口里，
-        等于没重试。这里按 initial_delay * 2**attempt 退避
-        （默认 3s → 6s → 12s），并叠加 ±25% 抖动，避免并发任务在同一刻齐步重试。
-        """
+        """网络异常重试装饰器逻辑。"""
         max_retries = self.settings.ai.retry.max_retries
         initial_delay = self.settings.ai.retry.initial_delay
         last_error = None
@@ -93,20 +84,7 @@ class AIGenerator:
             except _NETWORK_RETRY_ERRORS as e:
                 last_error = e
                 if attempt < max_retries:
-                    delay = initial_delay * (2**attempt) * random.uniform(0.75, 1.25)
-                    logger.opt(exception=True).warning(
-                        "网络异常，退避后重试",
-                        attempt=f"{attempt + 1}/{max_retries + 1}",
-                        delay=f"{delay:.1f}s",
-                        error=str(e),
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    logger.opt(exception=True).error(
-                        "网络异常重试耗尽",
-                        attempts=max_retries + 1,
-                        error=str(e),
-                    )
+                    await asyncio.sleep(initial_delay)
         raise last_error
 
     async def generate(
@@ -280,16 +258,6 @@ class AIGenerator:
             timeout=httpx.Timeout(300.0, connect=30.0),
         ) as client:
             response = await client.post(url, json=body, headers=headers)
-            if response.status_code >= 400:
-                logger.error(
-                    "AI 上游错误响应",
-                    status=response.status_code,
-                    url=url,
-                    body_snippet=response.text[:600],
-                    request_body_keys=sorted(body.keys()),
-                    prompt_len=len(prompt),
-                    image_count=len(image_bytes_list),
-                )
             response.raise_for_status()
             data = response.json()
 
