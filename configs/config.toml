@@ -572,7 +572,8 @@ result_image_field = "生成图片"
 result_status_field = "生成结果"
 result_time_field = "生成时间"
 
-# 分辨率（可选值 1K / 2K / 4K，缺失/空 → None）
+# 比例 + 分辨率（缺省/空走 AI 默认，无校验）
+aspect_ratio_field = "比例"
 resolution_field = "分辨率"
 
 [[dingtalk.tables]]
@@ -593,6 +594,7 @@ result_image_field = "生成图片"
 result_status_field = "生成结果"
 result_time_field = "生成时间"
 
+aspect_ratio_field = "比例"
 resolution_field = "分辨率"
 
 [[dingtalk.tables]]
@@ -613,4 +615,5 @@ result_image_field = "生成图片"
 result_status_field = "生成结果"
 result_time_field = "生成时间"
 
+aspect_ratio_field = "比例"
 resolution_field = "分辨率"
